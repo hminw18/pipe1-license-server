@@ -115,6 +115,37 @@ def test_admin_device_deactivation_key_rotation_feature_and_quota(
     assert replacement_key.startswith("PIPE1-")
 
 
+def test_deactivated_device_cannot_validate_cached_activation(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings))
+    admin = AdminService(settings)
+    org_id = admin.create_organization("Deactivate Co", "ops@example.com")
+    license_id = admin.create_license(
+        organization_id=org_id,
+        plan="standard",
+        device_limit=1,
+        expires_at="2027-06-30T23:59:59Z",
+        features={"local_report": True},
+    )
+    raw_key = admin.generate_license_key(license_id)
+    activation = _activate(client, raw_key, "pipe1-deactivated-dev")
+
+    admin.deactivate_device(activation["activation_id"], actor="support")
+    validation = client.post(
+        "/licenses/validate",
+        json={
+            "activation_id": activation["activation_id"],
+            "device_id": "pipe1-deactivated-dev",
+            "app_version": "0.1.0",
+        },
+    )
+
+    assert validation.status_code == 403
+    assert validation.json()["code"] == "INACTIVE_ACTIVATION"
+
+
 def test_admin_cli_can_issue_and_revoke_key(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     out = StringIO()
