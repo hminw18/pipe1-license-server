@@ -1,0 +1,66 @@
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: server/license_server/Dockerfile
+    container_name: pipe1-license-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PIPE1_DATABASE_URL: ${DATABASE_URL}
+      PIPE1_SIGNING_PRIVATE_KEY: ${PIPE1_LICENSE_SIGNING_PRIVATE_KEY}
+      PIPE1_SIGNING_KEY_ID: ${PIPE1_SIGNING_KEY_ID:-license-signing-key-001}
+      PIPE1_APP_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  db:
+    image: postgres:16-alpine
+    container_name: pipe1-license-db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pipe1_license}
+      POSTGRES_USER: ${POSTGRES_USER:-pipe1}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pipe1} -d ${POSTGRES_DB:-pipe1_license}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  proxy:
+    image: caddy:2-alpine
+    container_name: pipe1-license-proxy
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

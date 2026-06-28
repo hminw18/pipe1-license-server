@@ -1,0 +1,100 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./pipe1 start
+  ./pipe1 stop
+  ./pipe1 restart [api|proxy|db]
+  ./pipe1 status
+  ./pipe1 logs [api|proxy|db]
+  ./pipe1 health
+  ./pipe1 private-key
+  ./pipe1 public-key
+  ./pipe1 backup
+  ./pipe1 db
+  ./pipe1 <pipe1-admin command>
+
+Admin examples:
+  ./pipe1 org list
+  ./pipe1 license list
+  ./pipe1 key list --license LICENSE_ID
+  ./pipe1 devices list --license LICENSE_ID --all
+  ./pipe1 feature list --license LICENSE_ID
+EOF
+}
+
+if [ "$#" -eq 0 ]; then
+  usage
+  exit 2
+fi
+
+command="$1"
+shift
+
+case "$command" in
+  start)
+    docker compose up -d --build "$@"
+    ;;
+  stop)
+    docker compose down "$@"
+    ;;
+  restart)
+    if [ "$#" -eq 0 ]; then
+      docker compose restart api proxy
+    else
+      docker compose restart "$@"
+    fi
+    ;;
+  status | ps)
+    docker compose ps "$@"
+    ;;
+  logs)
+    if [ "$#" -eq 0 ]; then
+      docker compose logs -f api
+    else
+      docker compose logs -f "$@"
+    fi
+    ;;
+  health)
+    domain="$(sed -n 's/^PIPE1_LICENSE_DOMAIN=//p' .env 2>/dev/null | tail -n 1)"
+    if [ -z "$domain" ]; then
+      echo "PIPE1_LICENSE_DOMAIN is not set in .env" >&2
+      exit 1
+    fi
+    curl -fsS "https://$domain/health"
+    printf '\n'
+    ;;
+  private-key)
+    docker compose build api >/dev/null
+    docker compose run --rm --no-deps --entrypoint python api -c "from pipe1_license_server.signing import generate_private_key_b64; print(generate_private_key_b64())"
+    ;;
+  public-key)
+    docker compose build api >/dev/null
+    docker compose run --rm --no-deps --entrypoint python api -c "import os; from pipe1_license_server.signing import EntitlementSigner; print(EntitlementSigner(os.environ['PIPE1_SIGNING_PRIVATE_KEY'], os.environ.get('PIPE1_SIGNING_KEY_ID', 'license-signing-key-001')).public_key_b64)"
+    ;;
+  backup)
+    ./backup_postgres.sh "$@"
+    ;;
+  db)
+    docker compose exec db sh -lc 'psql -U "${POSTGRES_USER:-pipe1}" -d "${POSTGRES_DB:-pipe1_license}"'
+    ;;
+  admin)
+    docker compose exec -T api pipe1-admin "$@"
+    ;;
+  org | license | key | devices | device | feature | quota | usage | audit)
+    docker compose exec -T api pipe1-admin "$command" "$@"
+    ;;
+  help | -h | --help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

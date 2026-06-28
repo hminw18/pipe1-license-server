@@ -1,0 +1,19 @@
+{$PIPE1_LICENSE_DOMAIN} {
+    encode zstd gzip
+    request_body {
+        max_size 8MB
+    }
+
+    @admin path /admin*
+    handle @admin {
+        @adminDenied {
+            not remote_ip {$PIPE1_ADMIN_ALLOWED_IPS:127.0.0.1/32 ::1/128}
+        }
+        respond @adminDenied 404
+        reverse_proxy api:8000
+    }
+
+    handle {
+        reverse_proxy api:8000
+    }
+}
