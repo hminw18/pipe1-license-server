@@ -262,11 +262,15 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
             )
             session.add(activation)
         else:
+            activation.license_key_id = key.id
             activation.device_name = body.device_name
             activation.os_name = body.os_name
             activation.os_version = body.os_version
             activation.app_version = body.app_version
+            activation.status = "active"
+            activation.activated_at = now
             activation.last_validated_at = now
+            activation.deactivated_at = None
         key.last_used_at = now
         upload_token = _generate_upload_token()
         activation.upload_token_hash = _hash_upload_token(upload_token)

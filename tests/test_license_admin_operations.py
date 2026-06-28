@@ -146,6 +146,46 @@ def test_deactivated_device_cannot_validate_cached_activation(
     assert validation.json()["code"] == "INACTIVE_ACTIVATION"
 
 
+def test_deactivated_same_device_can_be_reactivated_with_license_key(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings))
+    admin = AdminService(settings)
+    org_id = admin.create_organization("Reactivate Co", "ops@example.com")
+    license_id = admin.create_license(
+        organization_id=org_id,
+        plan="standard",
+        device_limit=1,
+        expires_at="2027-06-30T23:59:59Z",
+        features={"local_report": True},
+    )
+    raw_key = admin.generate_license_key(license_id)
+    first = _activate(client, raw_key, "pipe1-reactivated-dev")
+
+    admin.deactivate_device(first["activation_id"], actor="support")
+    second = _activate(client, raw_key, "pipe1-reactivated-dev")
+    validation = client.post(
+        "/licenses/validate",
+        json={
+            "activation_id": second["activation_id"],
+            "device_id": "pipe1-reactivated-dev",
+            "app_version": "0.1.0",
+        },
+    )
+    active_devices = admin.list_device_activations(license_id)
+    all_devices = admin.list_device_activations(license_id, active_only=False)
+    all_device_statuses = [device["status"] for device in all_devices]
+
+    assert second["activation_id"] == first["activation_id"]
+    assert validation.status_code == 200
+    assert [device["device_id"] for device in active_devices] == [
+        "pipe1-reactivated-dev"
+    ]
+    assert all_device_statuses == ["active"]
+    assert all_devices[0]["deactivated_at"] is None
+
+
 def test_admin_cli_can_issue_and_revoke_key(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     out = StringIO()
