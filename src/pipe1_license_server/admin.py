@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from pipe1_license_server.db import init_db, session_scope
 from pipe1_license_server.models import (
     AdminAuditEvent,
+    AppRelease,
     DeviceActivation,
     License,
     LicenseFeature,
@@ -21,6 +22,16 @@ from pipe1_license_server.models import (
     Organization,
     TrainingSample,
     TrainingSnapshot,
+)
+from pipe1_license_server.releases import (
+    compare_versions,
+    normalize_release_status,
+    normalize_release_target,
+    release_to_dict,
+    validate_download_url,
+    validate_sha256,
+    validate_size_bytes,
+    validate_version,
 )
 from pipe1_license_server.settings import ServerSettings
 
@@ -714,6 +725,194 @@ class AdminService:
                 }
                 for row in rows
             ]
+
+    def create_release(
+        self,
+        *,
+        version: str,
+        platform: str,
+        arch: str,
+        channel: str,
+        download_url: str,
+        sha256: str,
+        size_bytes: int,
+        release_notes: str | None = None,
+        mandatory: bool = False,
+        min_supported_version: str | None = None,
+        status: str = "draft",
+        actor: str = "developer",
+    ) -> dict[str, Any]:
+        version = validate_version(version)
+        platform, arch, channel = normalize_release_target(platform, arch, channel)
+        status = normalize_release_status(status)
+        download_url = validate_download_url(download_url)
+        sha256 = validate_sha256(sha256)
+        size_bytes = validate_size_bytes(size_bytes)
+        min_supported_version = (
+            validate_version(min_supported_version)
+            if min_supported_version
+            else None
+        )
+        if (
+            min_supported_version
+            and compare_versions(min_supported_version, version) > 0
+        ):
+            raise ValueError("min_supported_version cannot be newer than version")
+        release_id = _new_id("rel")
+        now = _now()
+        with session_scope(self.settings) as session:
+            existing = session.execute(
+                select(AppRelease).where(
+                    AppRelease.version == version,
+                    AppRelease.platform == platform,
+                    AppRelease.arch == arch,
+                    AppRelease.channel == channel,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                raise ValueError("app release already exists")
+            release = AppRelease(
+                id=release_id,
+                version=version,
+                platform=platform,
+                arch=arch,
+                channel=channel,
+                status=status,
+                mandatory=mandatory,
+                min_supported_version=min_supported_version,
+                download_url=download_url,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                release_notes=release_notes,
+                published_at=now if status == "published" else None,
+            )
+            session.add(release)
+            session.add(
+                AdminAuditEvent(
+                    id=_new_id("audit"),
+                    actor=actor,
+                    action="app_release.create",
+                    target_type="app_release",
+                    target_id=release_id,
+                    metadata_json={
+                        "version": version,
+                        "platform": platform,
+                        "arch": arch,
+                        "channel": channel,
+                        "status": status,
+                    },
+                )
+            )
+            session.flush()
+            session.refresh(release)
+            return release_to_dict(release)
+
+    def list_releases(
+        self,
+        *,
+        platform: str | None = None,
+        channel: str | None = None,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with session_scope(self.settings) as session:
+            query = select(AppRelease)
+            if platform:
+                query = query.where(AppRelease.platform == platform.strip().lower())
+            if channel:
+                query = query.where(AppRelease.channel == channel.strip().lower())
+            if status:
+                query = query.where(AppRelease.status == status.strip().lower())
+            rows = session.execute(
+                query.order_by(AppRelease.created_at.desc(), AppRelease.version.desc())
+            ).scalars()
+            return [release_to_dict(row) for row in rows]
+
+    def publish_release(
+        self,
+        *,
+        version: str,
+        platform: str = "windows",
+        arch: str = "x64",
+        channel: str = "stable",
+        actor: str = "developer",
+    ) -> dict[str, Any]:
+        return self._set_release_status(
+            version=version,
+            platform=platform,
+            arch=arch,
+            channel=channel,
+            status="published",
+            actor=actor,
+        )
+
+    def disable_release(
+        self,
+        *,
+        version: str,
+        platform: str = "windows",
+        arch: str = "x64",
+        channel: str = "stable",
+        actor: str = "developer",
+    ) -> dict[str, Any]:
+        return self._set_release_status(
+            version=version,
+            platform=platform,
+            arch=arch,
+            channel=channel,
+            status="disabled",
+            actor=actor,
+        )
+
+    def _set_release_status(
+        self,
+        *,
+        version: str,
+        platform: str,
+        arch: str,
+        channel: str,
+        status: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        version = validate_version(version)
+        platform, arch, channel = normalize_release_target(platform, arch, channel)
+        status = normalize_release_status(status)
+        with session_scope(self.settings) as session:
+            release = session.execute(
+                select(AppRelease).where(
+                    AppRelease.version == version,
+                    AppRelease.platform == platform,
+                    AppRelease.arch == arch,
+                    AppRelease.channel == channel,
+                )
+            ).scalar_one_or_none()
+            if release is None:
+                raise ValueError("app release not found")
+            release.status = status
+            if status == "published":
+                release.published_at = release.published_at or _now()
+            session.add(
+                AdminAuditEvent(
+                    id=_new_id("audit"),
+                    actor=actor,
+                    action=(
+                        "app_release.publish"
+                        if status == "published"
+                        else "app_release.disable"
+                    ),
+                    target_type="app_release",
+                    target_id=release.id,
+                    metadata_json={
+                        "version": version,
+                        "platform": platform,
+                        "arch": arch,
+                        "channel": channel,
+                        "status": status,
+                    },
+                )
+            )
+            session.flush()
+            session.refresh(release)
+            return release_to_dict(release)
 
     def record_usage_event(
         self,

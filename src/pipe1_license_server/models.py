@@ -180,6 +180,37 @@ class AdminAuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AppRelease(Base):
+    __tablename__ = "app_releases"
+    __table_args__ = (
+        UniqueConstraint(
+            "version",
+            "platform",
+            "arch",
+            "channel",
+            name="ux_app_release_target",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), nullable=False)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    arch: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False, default="stable")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    min_supported_version: Mapped[str | None] = mapped_column(String(64))
+    download_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    release_notes: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class TrainingSnapshot(Base):
     __tablename__ = "training_snapshots"
     __table_args__ = (

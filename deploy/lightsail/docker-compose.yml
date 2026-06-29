@@ -25,6 +25,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    volumes:
+      - ${PIPE1_DOWNLOADS_DIR:-/opt/pipe1-downloads}:/srv/pipe1-downloads:ro
 
   db:
     image: postgres:16-alpine
@@ -57,6 +59,7 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${PIPE1_DOWNLOADS_DIR:-/opt/pipe1-downloads}:/srv/pipe1-downloads:ro
       - caddy-data:/data
       - caddy-config:/config
 

@@ -351,6 +351,88 @@ def create_admin_router(settings: ServerSettings) -> APIRouter:
             return _redirect(f"/admin/licenses/{quote(license_id)}", error=str(exc))
         return _redirect(f"/admin/licenses/{quote(license_id)}", notice="Quota set.")
 
+    @router.get("/releases")
+    def releases(
+        request: Request, notice: str | None = None, error: str | None = None
+    ) -> Response:
+        admin_session = _current_session(request, settings)
+        if admin_session is None:
+            return _redirect("/admin/login")
+        body = _releases_body(service.list_releases(), admin_session.csrf_token)
+        return _layout(
+            "App Releases",
+            "releases",
+            admin_session,
+            body,
+            notice=notice,
+            error=error,
+        )
+
+    @router.post("/releases")
+    async def create_release(request: Request) -> Response:
+        admin_session, form, response = await _require_form(
+            request, settings, "/admin/releases"
+        )
+        if response is not None or admin_session is None:
+            return response or _redirect("/admin/login")
+        try:
+            size_bytes = int(form.get("size_bytes", "0"))
+            service.create_release(
+                version=form.get("version", "").strip(),
+                platform=form.get("platform", "windows").strip() or "windows",
+                arch=form.get("arch", "x64").strip() or "x64",
+                channel=form.get("channel", "stable").strip() or "stable",
+                download_url=form.get("download_url", "").strip(),
+                sha256=form.get("sha256", "").strip(),
+                size_bytes=size_bytes,
+                release_notes=form.get("release_notes", "").strip() or None,
+                mandatory=form.get("mandatory") == "on",
+                min_supported_version=form.get("min_supported_version", "").strip()
+                or None,
+                actor=admin_session.username,
+            )
+        except ValueError as exc:
+            return _redirect("/admin/releases", error=str(exc))
+        return _redirect("/admin/releases", notice="Release created.")
+
+    @router.post("/releases/publish")
+    async def publish_release(request: Request) -> Response:
+        admin_session, form, response = await _require_form(
+            request, settings, "/admin/releases"
+        )
+        if response is not None or admin_session is None:
+            return response or _redirect("/admin/login")
+        try:
+            service.publish_release(
+                version=form.get("version", "").strip(),
+                platform=form.get("platform", "windows").strip() or "windows",
+                arch=form.get("arch", "x64").strip() or "x64",
+                channel=form.get("channel", "stable").strip() or "stable",
+                actor=admin_session.username,
+            )
+        except ValueError as exc:
+            return _redirect("/admin/releases", error=str(exc))
+        return _redirect("/admin/releases", notice="Release published.")
+
+    @router.post("/releases/disable")
+    async def disable_release(request: Request) -> Response:
+        admin_session, form, response = await _require_form(
+            request, settings, "/admin/releases"
+        )
+        if response is not None or admin_session is None:
+            return response or _redirect("/admin/login")
+        try:
+            service.disable_release(
+                version=form.get("version", "").strip(),
+                platform=form.get("platform", "windows").strip() or "windows",
+                arch=form.get("arch", "x64").strip() or "x64",
+                channel=form.get("channel", "stable").strip() or "stable",
+                actor=admin_session.username,
+            )
+        except ValueError as exc:
+            return _redirect("/admin/releases", error=str(exc))
+        return _redirect("/admin/releases", notice="Release disabled.")
+
     @router.get("/training")
     def training(
         request: Request, notice: str | None = None, error: str | None = None
@@ -599,6 +681,7 @@ def _layout(
         _nav_item(label, path, active == key)
         for key, label, path in (
             ("licenses", "Licenses", "/admin/licenses"),
+            ("releases", "Releases", "/admin/releases"),
             ("training", "Training", "/admin/training"),
             ("audit", "Audit", "/admin/audit"),
         )
@@ -820,6 +903,75 @@ def _license_detail_body(
     """
 
 
+def _releases_body(rows: list[dict[str, Any]], csrf_token: str) -> str:
+    release_rows = []
+    for row in rows:
+        target_fields = f"""
+          <input type="hidden" name="version" value="{_h(row['version'])}" />
+          <input type="hidden" name="platform" value="{_h(row['platform'])}" />
+          <input type="hidden" name="arch" value="{_h(row['arch'])}" />
+          <input type="hidden" name="channel" value="{_h(row['channel'])}" />
+        """
+        actions = []
+        if row["status"] != "published":
+            actions.append(
+                f"""
+                <form method="post" action="/admin/releases/publish" class="inline-form">
+                  {_csrf(csrf_token)}
+                  {target_fields}
+                  <button type="submit">Publish</button>
+                </form>
+                """
+            )
+        if row["status"] != "disabled":
+            actions.append(
+                f"""
+                <form method="post" action="/admin/releases/disable" class="inline-form">
+                  {_csrf(csrf_token)}
+                  {target_fields}
+                  <button class="danger" type="submit">Disable</button>
+                </form>
+                """
+            )
+        release_rows.append(
+            [
+                _h(row["version"]),
+                _h(f"{row['platform']} / {row['arch']} / {row['channel']}"),
+                _pill(row["status"]),
+                _pill(str(row["mandatory"]).lower()),
+                _h(row["min_supported_version"] or ""),
+                str(row["size_bytes"]),
+                _h(_short_dt(row["published_at"])),
+                "<div class='inline-actions'>" + "".join(actions) + "</div>",
+            ]
+        )
+    return f"""
+      <section class="panel">
+        <h2>Create Release</h2>
+        <form method="post" action="/admin/releases" class="stack-form compact">
+          {_csrf(csrf_token)}
+          <div class="inline-grid-form release-form-grid">
+            <label><span>Version</span><input name="version" placeholder="1.2.3" required /></label>
+            <label><span>Platform</span><input name="platform" value="windows" required /></label>
+            <label><span>Arch</span><input name="arch" value="x64" required /></label>
+            <label><span>Channel</span><input name="channel" value="stable" required /></label>
+            <label><span>Size bytes</span><input name="size_bytes" type="number" min="1" required /></label>
+            <label><span>Min supported</span><input name="min_supported_version" placeholder="1.0.0" /></label>
+          </div>
+          <label><span>Download URL</span><input name="download_url" type="url" placeholder="https://license.example.com/downloads/Pipe1-1.2.3-x64.msi" required /></label>
+          <label><span>SHA-256</span><input name="sha256" minlength="64" maxlength="64" required /></label>
+          <label><span>Release notes</span><textarea name="release_notes" rows="3"></textarea></label>
+          <label class="check-row"><input name="mandatory" type="checkbox" /> <span>Mandatory update</span></label>
+          <button type="submit">Create release</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>App Releases</h2>
+        {_table(["Version", "Target", "Status", "Mandatory", "Min supported", "Size", "Published", "Actions"], release_rows)}
+      </section>
+    """
+
+
 def _training_body(rows: list[dict[str, Any]]) -> str:
     return f"""
       <section class="panel">
@@ -917,10 +1069,15 @@ tr:last-child td { border-bottom: 0; }
 .stack-form { display: grid; gap: 12px; }
 .stack-form.compact { gap: 10px; }
 .inline-grid-form { display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)) auto; gap: 10px; align-items: end; }
+.release-form-grid { grid-template-columns: repeat(6, minmax(120px, 1fr)); }
 .inline-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .inline-form { display: flex; gap: 8px; align-items: center; }
 label span { display: block; color: #536170; font-size: 12px; font-weight: 800; margin-bottom: 5px; }
-input, select { width: 100%; min-height: 36px; border: 1px solid #cbd5df; border-radius: 6px; padding: 7px 9px; background: #ffffff; color: #1d2433; font: inherit; }
+input, select, textarea { width: 100%; min-height: 36px; border: 1px solid #cbd5df; border-radius: 6px; padding: 7px 9px; background: #ffffff; color: #1d2433; font: inherit; }
+textarea { resize: vertical; }
+.check-row { display: inline-flex; align-items: center; gap: 8px; }
+.check-row input { width: auto; min-height: auto; }
+.check-row span { margin: 0; }
 button { min-height: 36px; border: 0; border-radius: 6px; padding: 8px 12px; background: #0f6b71; color: #ffffff; font: inherit; font-weight: 800; cursor: pointer; white-space: nowrap; }
 button.secondary { background: #475467; }
 button.danger { background: #b42318; }
@@ -929,7 +1086,7 @@ button.danger { background: #b42318; }
 @media (max-width: 920px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; padding: 16px; }
-  nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .content { padding: 16px; }
   .grid.two, .metrics, .inline-grid-form { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; }

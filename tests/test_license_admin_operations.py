@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from io import StringIO
 from pathlib import Path
 
@@ -225,6 +226,59 @@ def test_admin_cli_can_issue_and_revoke_key(tmp_path: Path) -> None:
     assert license_row["id"].startswith("lic_")
     assert key["license_key"].startswith("PIPE1-")
     assert revoked["status"] == "revoked"
+
+
+def test_admin_cli_can_manage_app_releases(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    out = StringIO()
+    installer = tmp_path / "Pipe1-1.2.3-x64.msi"
+    installer.write_bytes(b"pipe1 test installer")
+    expected_sha = hashlib.sha256(installer.read_bytes()).hexdigest()
+
+    created = run_cli(
+        [
+            "release",
+            "create",
+            "--version",
+            "1.2.3",
+            "--platform",
+            "windows",
+            "--arch",
+            "x64",
+            "--channel",
+            "stable",
+            "--download-url",
+            "https://license.example.com/downloads/Pipe1-1.2.3-x64.msi",
+            "--file",
+            str(installer),
+            "--notes",
+            "Windows production release",
+        ],
+        settings=settings,
+        stdout=out,
+    )
+    published = run_cli(
+        ["release", "publish", "--version", "1.2.3"],
+        settings=settings,
+        stdout=out,
+    )
+    listed = run_cli(["release", "list"], settings=settings, stdout=out)
+    disabled = run_cli(
+        ["release", "disable", "--version", "1.2.3"],
+        settings=settings,
+        stdout=out,
+    )
+
+    assert created["release"]["id"].startswith("rel_")
+    assert created["release"]["sha256"] == expected_sha
+    assert created["release"]["size_bytes"] == len(b"pipe1 test installer")
+    assert published["release"]["status"] == "published"
+    assert listed["releases"][0]["version"] == "1.2.3"
+    assert disabled["release"]["status"] == "disabled"
+    audit_actions = [event["action"] for event in AdminService(settings).list_audit_events()]
+    assert "app_release.create" in audit_actions
+    assert "app_release.publish" in audit_actions
+    assert "app_release.disable" in audit_actions
 
 
 def test_admin_cli_can_list_license_server_records(tmp_path: Path) -> None:

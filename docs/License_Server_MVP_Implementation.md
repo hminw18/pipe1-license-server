@@ -595,6 +595,9 @@ pipe1-admin devices list --license LICENSE_ID
 pipe1-admin device deactivate --activation ACTIVATION_ID
 pipe1-admin feature set --license LICENSE_ID --feature training_upload --enabled true
 pipe1-admin quota set --license LICENSE_ID --feature ai_assist --unit credit --limit 10000 --period monthly
+pipe1-admin release create --version 1.2.3 --download-url https://license.example.com/downloads/Pipe1-1.2.3-x64.msi --file /srv/pipe1-downloads/Pipe1-1.2.3-x64.msi
+pipe1-admin release publish --version 1.2.3
+pipe1-admin release disable --version 1.2.3
 ```
 
 Rules:
@@ -603,6 +606,13 @@ Rules:
 - CLI must print generated raw license keys only once.
 - CLI output should be copyable for customer support.
 - CLI must not print secrets unnecessarily.
+
+Update release rules:
+
+- Installer files are uploaded to the server filesystem out of band, then registered by URL, size, and SHA-256.
+- Caddy serves `/downloads/*` from the configured read-only downloads directory.
+- Only `published` releases are visible through `GET /app/releases/latest`.
+- Release versions must use `MAJOR.MINOR.PATCH`.
 
 ## 8. Security Requirements
 

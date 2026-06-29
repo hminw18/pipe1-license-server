@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+from pathlib import Path
 from typing import Any, TextIO
 
 from pipe1_license_server.admin import AdminService
@@ -86,6 +88,32 @@ def _parser() -> argparse.ArgumentParser:
     audit = subcommands.add_parser("audit")
     audit_sub = audit.add_subparsers(dest="action", required=True)
     audit_sub.add_parser("list")
+
+    release = subcommands.add_parser("release")
+    release_sub = release.add_subparsers(dest="action", required=True)
+    release_create = release_sub.add_parser("create")
+    release_create.add_argument("--version", required=True)
+    release_create.add_argument("--platform", default="windows")
+    release_create.add_argument("--arch", default="x64")
+    release_create.add_argument("--channel", default="stable")
+    release_create.add_argument("--download-url", required=True)
+    release_create.add_argument("--file")
+    release_create.add_argument("--sha256")
+    release_create.add_argument("--size-bytes", type=int)
+    release_create.add_argument("--notes")
+    release_create.add_argument("--mandatory", action="store_true")
+    release_create.add_argument("--min-supported-version")
+    release_create.add_argument(
+        "--status", choices=["draft", "published", "disabled"], default="draft"
+    )
+    release_list = release_sub.add_parser("list")
+    release_list.add_argument("--platform")
+    release_list.add_argument("--channel")
+    release_list.add_argument("--status")
+    release_publish = release_sub.add_parser("publish")
+    _add_release_target_args(release_publish)
+    release_disable = release_sub.add_parser("disable")
+    _add_release_target_args(release_disable)
     return parser
 
 
@@ -168,12 +196,79 @@ def run_cli(
         output = {"usage_events": service.list_usage_events(args.license)}
     elif args.resource == "audit" and args.action == "list":
         output = {"audit_events": service.list_audit_events()}
+    elif args.resource == "release" and args.action == "create":
+        sha256, size_bytes = _release_file_metadata(
+            args.file,
+            args.sha256,
+            args.size_bytes,
+        )
+        output = {
+            "release": service.create_release(
+                version=args.version,
+                platform=args.platform,
+                arch=args.arch,
+                channel=args.channel,
+                download_url=args.download_url,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                release_notes=args.notes,
+                mandatory=args.mandatory,
+                min_supported_version=args.min_supported_version,
+                status=args.status,
+            )
+        }
+    elif args.resource == "release" and args.action == "list":
+        output = {
+            "releases": service.list_releases(
+                platform=args.platform,
+                channel=args.channel,
+                status=args.status,
+            )
+        }
+    elif args.resource == "release" and args.action == "publish":
+        output = {
+            "release": service.publish_release(
+                version=args.version,
+                platform=args.platform,
+                arch=args.arch,
+                channel=args.channel,
+            )
+        }
+    elif args.resource == "release" and args.action == "disable":
+        output = {
+            "release": service.disable_release(
+                version=args.version,
+                platform=args.platform,
+                arch=args.arch,
+                channel=args.channel,
+            )
+        }
     else:  # pragma: no cover - argparse prevents this path
         raise SystemExit(2)
 
     target = stdout or sys.stdout
     target.write(json.dumps(output, ensure_ascii=False, sort_keys=True) + "\n")
     return output
+
+
+def _add_release_target_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--platform", default="windows")
+    parser.add_argument("--arch", default="x64")
+    parser.add_argument("--channel", default="stable")
+
+
+def _release_file_metadata(
+    file_path: str | None,
+    sha256: str | None,
+    size_bytes: int | None,
+) -> tuple[str, int]:
+    if file_path:
+        payload = Path(file_path).read_bytes()
+        return hashlib.sha256(payload).hexdigest(), len(payload)
+    if sha256 and size_bytes is not None:
+        return sha256, size_bytes
+    raise ValueError("Either --file or both --sha256 and --size-bytes are required.")
 
 
 def main() -> None:

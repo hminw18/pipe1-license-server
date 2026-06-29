@@ -25,6 +25,7 @@ Admin examples:
   ./pipe1 key list --license LICENSE_ID
   ./pipe1 devices list --license LICENSE_ID --all
   ./pipe1 feature list --license LICENSE_ID
+  ./pipe1 release list
 EOF
 }
 
@@ -86,7 +87,7 @@ case "$command" in
   admin)
     docker compose exec -T api pipe1-admin "$@"
     ;;
-  org | license | key | devices | device | feature | quota | usage | audit)
+  org | license | key | devices | device | feature | quota | usage | audit | release)
     docker compose exec -T api pipe1-admin "$command" "$@"
     ;;
   help | -h | --help)

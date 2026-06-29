@@ -175,6 +175,73 @@ def test_admin_web_requires_login_and_manages_license(tmp_path: Path) -> None:
     assert "device.deactivate" in audit.text
 
 
+def test_admin_web_manages_app_releases(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    client = TestClient(create_app(settings))
+    csrf = _login(client)
+
+    page = client.get("/admin/releases")
+    assert page.status_code == 200
+    assert "App Releases" in page.text
+
+    created = client.post(
+        "/admin/releases",
+        data={
+            "csrf_token": csrf,
+            "version": "1.2.3",
+            "platform": "windows",
+            "arch": "x64",
+            "channel": "stable",
+            "download_url": "https://license.example.com/downloads/Pipe1-1.2.3-x64.msi",
+            "sha256": "d" * 64,
+            "size_bytes": "4096",
+            "min_supported_version": "1.0.0",
+            "release_notes": "Windows production release",
+            "mandatory": "on",
+        },
+        follow_redirects=False,
+    )
+    assert created.status_code == 303
+
+    admin = AdminService(settings)
+    releases = admin.list_releases()
+    assert releases[0]["version"] == "1.2.3"
+    assert releases[0]["mandatory"] is True
+    assert releases[0]["status"] == "draft"
+
+    published = client.post(
+        "/admin/releases/publish",
+        data={
+            "csrf_token": csrf,
+            "version": "1.2.3",
+            "platform": "windows",
+            "arch": "x64",
+            "channel": "stable",
+        },
+        follow_redirects=False,
+    )
+    assert published.status_code == 303
+    assert AdminService(settings).list_releases()[0]["status"] == "published"
+
+    disabled = client.post(
+        "/admin/releases/disable",
+        data={
+            "csrf_token": csrf,
+            "version": "1.2.3",
+            "platform": "windows",
+            "arch": "x64",
+            "channel": "stable",
+        },
+        follow_redirects=False,
+    )
+    assert disabled.status_code == 303
+    assert AdminService(settings).list_releases()[0]["status"] == "disabled"
+
+    audit = client.get("/admin/audit")
+    assert "app_release.publish" in audit.text
+    assert "app_release.disable" in audit.text
+
+
 def test_admin_web_requires_csrf_for_mutations(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     client = TestClient(create_app(settings))

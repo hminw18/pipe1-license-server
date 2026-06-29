@@ -20,6 +20,7 @@ from pipe1_license_server.admin import hash_license_key
 from pipe1_license_server.admin_web import create_admin_router
 from pipe1_license_server.db import create_session_factory, init_db
 from pipe1_license_server.models import (
+    AppRelease,
     DeviceActivation,
     EntitlementSnapshot,
     License,
@@ -29,6 +30,12 @@ from pipe1_license_server.models import (
     TrainingConsent,
     TrainingSample,
     TrainingSnapshot,
+)
+from pipe1_license_server.releases import (
+    compare_versions,
+    latest_published_release,
+    normalize_release_target,
+    validate_version,
 )
 from pipe1_license_server.settings import ServerSettings
 from pipe1_license_server.signing import EntitlementSigner, canonical_json_bytes
@@ -189,6 +196,33 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "env": settings.app_env}
+
+    @app.get("/app/releases/latest")
+    def latest_app_release(
+        platform: str,
+        arch: str,
+        current_version: str,
+        channel: str = "stable",
+        session: Session = Depends(get_session),
+    ) -> Any:
+        try:
+            current_version = validate_version(current_version)
+        except ValueError as exc:
+            return _error("BAD_VERSION", str(exc), 400)
+        try:
+            platform, arch, channel = normalize_release_target(platform, arch, channel)
+        except ValueError as exc:
+            return _error("BAD_RELEASE_TARGET", str(exc), 400)
+        rows = session.execute(
+            select(AppRelease).where(
+                AppRelease.platform == platform,
+                AppRelease.arch == arch,
+                AppRelease.channel == channel,
+                AppRelease.status == "published",
+            )
+        ).scalars()
+        release = latest_published_release(rows)
+        return _release_update_payload(release, current_version)
 
     @app.post("/licenses/activate")
     def activate_license(
@@ -494,6 +528,43 @@ def create_app(settings: ServerSettings | None = None) -> FastAPI:
         }
 
     return app
+
+
+def _release_update_payload(
+    release: AppRelease | None, current_version: str
+) -> dict[str, Any]:
+    if release is None:
+        return {
+            "update_available": False,
+            "current_version": current_version,
+            "latest_version": None,
+            "mandatory": False,
+            "min_supported_version": None,
+            "download_url": None,
+            "sha256": None,
+            "size_bytes": None,
+            "release_notes": None,
+            "published_at": None,
+        }
+    update_available = compare_versions(release.version, current_version) > 0
+    mandatory = False
+    if release.min_supported_version:
+        mandatory = mandatory or compare_versions(
+            current_version, release.min_supported_version
+        ) < 0
+    mandatory = update_available and (mandatory or bool(release.mandatory))
+    return {
+        "update_available": update_available,
+        "current_version": current_version,
+        "latest_version": release.version,
+        "mandatory": mandatory,
+        "min_supported_version": release.min_supported_version,
+        "download_url": release.download_url if update_available else None,
+        "sha256": release.sha256 if update_available else None,
+        "size_bytes": release.size_bytes if update_available else None,
+        "release_notes": release.release_notes if update_available else None,
+        "published_at": _iso(release.published_at) if update_available else None,
+    }
 
 
 def _training_authorization_error(
